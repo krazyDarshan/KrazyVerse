@@ -5,7 +5,7 @@ KrazyVerse is a TypeScript monorepo for an Instagram-like social platform with E
 ## Apps And Packages
 
 - `apps/api` - Express.js REST API under `/api/v1`, Socket.IO, Prisma schema, auth, posts, stories, reels, DMs, creator tools, admin, security, AI routes.
-- `apps/mobile` - Expo React Native app with Home, Search, Create, Reels, Profile tabs, haptics, push, deep links, MMKV cache, biometrics, camera, picker.
+- `apps/mobile` - Expo React Native app with Home, Search, Create, Reels, Profile tabs, push, deep links, biometrics, camera, and picker integrations.
 - `apps/web` - Next.js 14 App Router social web experience.
 - `apps/admin` - Next.js 14 App Router operations panel.
 - `packages/shared` - Shared constants, types, and Zod validators.
@@ -44,8 +44,10 @@ npm run dev:api
 ```bash
 npm run dev:web
 npm run dev:admin
-npm run dev:mobile
+npm run dev:mobile:lan:clear
 ```
+
+For Expo Go on a physical phone, set `EXPO_PUBLIC_API_URL` and `REACT_NATIVE_PACKAGER_HOSTNAME` in the root `.env` to your computer's LAN address. For example, use `EXPO_PUBLIC_API_URL=http://192.168.31.230:4000/api/v1` and `REACT_NATIVE_PACKAGER_HOSTNAME=192.168.31.230`. If the phone loads forever after changing Wi-Fi networks, update that IP and restart Expo with `npm run dev:mobile:lan:clear`.
 
 Default URLs:
 

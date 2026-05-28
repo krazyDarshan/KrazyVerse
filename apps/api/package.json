@@ -11,7 +11,7 @@
     "db:generate": "dotenv -e ../../.env -- prisma generate",
     "db:migrate": "dotenv -e ../../.env -- prisma migrate dev --name init",
     "db:studio": "dotenv -e ../../.env -- prisma studio",
-    "test": "jest --runInBand"
+    "test": "jest --config ../../jest.config.cjs --runInBand"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",
