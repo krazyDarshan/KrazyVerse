@@ -40,6 +40,15 @@ export const passwordSchema = z
 
 export const otpSchema = z.string().regex(/^\d{6}$/, 'OTP must be exactly 6 digits');
 
+const mediaUrlSchema = z.string().refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:', 'file:', 'content:', 'data:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}, 'Media URL must be a valid remote or local media URI');
+
 export const authSchemas = {
   signup: z.object({
     email: emailSchema,
@@ -52,7 +61,10 @@ export const authSchemas = {
     email: emailSchema,
     password: z.string().min(1).max(128),
     deviceId: z.string().min(6).max(128),
-    totpCode: z.string().regex(/^\d{6}$/).optional(),
+    totpCode: z
+      .string()
+      .regex(/^\d{6}$/)
+      .optional(),
   }),
   refresh: z.object({
     refreshToken: z.string().min(20),
@@ -110,8 +122,8 @@ export const profileSchemas = {
 
 export const mediaInputSchema = z.object({
   type: z.enum(['IMAGE', 'VIDEO']),
-  url: z.string().url(),
-  thumbnailUrl: z.string().url().optional(),
+  url: mediaUrlSchema,
+  thumbnailUrl: mediaUrlSchema.optional(),
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
   durationMs: z.number().int().nonnegative().optional(),
@@ -173,7 +185,10 @@ export const messageSchemas = {
     clientId: z.string().min(4),
   }),
   createConversation: z.object({
-    memberIds: z.array(z.string()).min(1).max(CHAT_LIMITS.groupMembers - 1),
+    memberIds: z
+      .array(z.string())
+      .min(1)
+      .max(CHAT_LIMITS.groupMembers - 1),
     title: z.string().max(120).optional(),
     isGroup: z.boolean().default(false),
   }),

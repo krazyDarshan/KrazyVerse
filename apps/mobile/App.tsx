@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   FlatList,
+  Image,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -11,14 +12,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { AuthScreen } from './src/screens/AuthScreen';
-import { API_URL, api } from './src/lib/api';
+import { API_URL, ApiClientError, api } from './src/lib/api';
 import {
   type AuthSession,
   getStoredSession,
   loadStoredSession,
   logout as logoutDevice,
 } from './src/lib/auth';
+import { createPost, type FeedPost as FeedPostType, loadRecommendedFeed } from './src/lib/posts';
 
 type TabName = 'Home' | 'Search' | 'Create' | 'Reels' | 'Profile';
 
@@ -28,6 +31,7 @@ export default function App() {
   const [session, setSession] = useState<AuthSession | null>(() => getStoredSession());
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<TabName>('Home');
+  const [feedVersion, setFeedVersion] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -69,7 +73,19 @@ export default function App() {
         </View>
         <Text style={styles.pill}>Live API</Text>
       </View>
-      <View style={styles.content}>{renderTab(tab, session, () => setSession(null))}</View>
+      <View style={styles.content}>
+        {renderTab(
+          tab,
+          session,
+          feedVersion,
+          () => {
+            setFeedVersion((current) => current + 1);
+            setTab('Home');
+          },
+          () => setSession(null),
+          () => setSession(null),
+        )}
+      </View>
       <View style={styles.tabs}>
         {tabs.map((item) => (
           <Pressable
@@ -95,15 +111,22 @@ function LoadingScreen() {
   );
 }
 
-function renderTab(tab: TabName, session: AuthSession, onLoggedOut: () => void) {
+function renderTab(
+  tab: TabName,
+  session: AuthSession,
+  feedVersion: number,
+  onPostCreated: () => void,
+  onSessionExpired: () => void,
+  onLoggedOut: () => void,
+) {
   if (tab === 'Home') {
-    return <Home />;
+    return <Home refreshKey={feedVersion} />;
   }
   if (tab === 'Search') {
     return <Search />;
   }
   if (tab === 'Create') {
-    return <Create />;
+    return <Create onPostCreated={onPostCreated} onSessionExpired={onSessionExpired} />;
   }
   if (tab === 'Reels') {
     return <Reels />;
@@ -111,15 +134,15 @@ function renderTab(tab: TabName, session: AuthSession, onLoggedOut: () => void) 
   return <Profile session={session} onLoggedOut={onLoggedOut} />;
 }
 
-function Home() {
-  const [posts, setPosts] = useState<any[]>([]);
+function Home({ refreshKey }: { refreshKey: number }) {
+  const [posts, setPosts] = useState<FeedPostType[]>([]);
   const [status, setStatus] = useState('Loading personalized feed...');
   const [refreshing, setRefreshing] = useState(false);
 
   async function loadFeed() {
     setRefreshing(true);
     try {
-      const data = await api<any[]>('/feed?mode=recommended');
+      const data = await loadRecommendedFeed();
       setPosts(data);
       setStatus(data.length ? 'API connected' : 'API connected. No posts yet.');
     } catch {
@@ -131,7 +154,7 @@ function Home() {
 
   useEffect(() => {
     void loadFeed();
-  }, []);
+  }, [refreshKey]);
 
   const rows = posts.length ? posts : demoPosts;
 
@@ -158,8 +181,10 @@ function Home() {
   );
 }
 
-function FeedPost({ post }: { post: any }) {
+function FeedPost({ post }: { post: FeedPostType }) {
   const author = post.author?.profile;
+  const media = post.media?.[0];
+
   return (
     <View style={styles.post}>
       <View style={styles.postHeader}>
@@ -171,10 +196,14 @@ function FeedPost({ post }: { post: any }) {
           <Text style={styles.muted}>@{author?.username ?? 'krazyverse'}</Text>
         </View>
       </View>
-      <View style={styles.media}>
-        <Text style={styles.mediaText}>KrazyVerse</Text>
-      </View>
-      <Text style={styles.caption}>{post.caption}</Text>
+      {media?.type === 'IMAGE' ? (
+        <Image source={{ uri: media.url }} style={styles.mediaImage} resizeMode="cover" />
+      ) : (
+        <View style={styles.media}>
+          <Text style={styles.mediaText}>KrazyVerse</Text>
+        </View>
+      )}
+      <Text style={styles.caption}>{post.caption || 'Untitled KrazyVerse post'}</Text>
       <Text style={styles.metrics}>
         {post._count?.likes ?? 0} likes | {post._count?.comments ?? 0} comments
       </Text>
@@ -199,20 +228,135 @@ function Search() {
   );
 }
 
-function Create() {
+function Create({
+  onPostCreated,
+  onSessionExpired,
+}: {
+  onPostCreated(): void;
+  onSessionExpired(): void;
+}) {
+  const [caption, setCaption] = useState('');
+  const [selectedMedia, setSelectedMedia] = useState<{
+    uri: string;
+    width?: number;
+    height?: number;
+    mimeType?: string;
+    fileName?: string;
+  } | null>(null);
+  const [status, setStatus] = useState('Pick an image and write a caption.');
+  const [publishing, setPublishing] = useState(false);
+
+  async function pickImage() {
+    setStatus('Opening photo library...');
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setStatus('Photo library access is needed to pick an image.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
+      });
+
+      if (result.canceled || !result.assets[0]) {
+        setStatus(selectedMedia ? 'Image kept. Ready to publish.' : 'No image selected.');
+        return;
+      }
+
+      const asset = result.assets[0];
+      setSelectedMedia({
+        uri: asset.uri,
+        width: asset.width,
+        height: asset.height,
+        mimeType: asset.mimeType,
+        fileName: asset.fileName ?? undefined,
+      });
+      setStatus('Image selected. Ready to publish.');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not open photo library.');
+    }
+  }
+
+  async function publish() {
+    const nextCaption = caption.trim();
+    if (!nextCaption) {
+      setStatus('Write a caption first.');
+      return;
+    }
+    if (!selectedMedia) {
+      setStatus('Pick an image first.');
+      return;
+    }
+
+    setPublishing(true);
+    setStatus('Uploading image...');
+    try {
+      await createPost({ caption: nextCaption, media: selectedMedia });
+      setCaption('');
+      setSelectedMedia(null);
+      setStatus('Published. Opening Home feed...');
+      onPostCreated();
+    } catch (error) {
+      if (error instanceof ApiClientError && error.code === 'SESSION_EXPIRED') {
+        setStatus('Session expired. Please log in again.');
+        onSessionExpired();
+        return;
+      }
+      setStatus(error instanceof Error ? error.message : 'Post could not be published.');
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   return (
-    <View style={styles.panel}>
+    <ScrollView style={styles.panel} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Create</Text>
+      <Pressable style={styles.mediaPicker} onPress={pickImage}>
+        {selectedMedia ? (
+          <Image
+            source={{ uri: selectedMedia.uri }}
+            style={styles.createPreview}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.emptyPreview}>
+            <Text style={styles.emptyPreviewTitle}>Pick Image</Text>
+            <Text style={styles.emptyPreviewText}>Choose a photo from your gallery.</Text>
+          </View>
+        )}
+      </Pressable>
+      {selectedMedia ? (
+        <Pressable style={styles.removeMediaButton} onPress={() => setSelectedMedia(null)}>
+          <Text style={styles.removeMediaText}>Remove image</Text>
+        </Pressable>
+      ) : null}
       <TextInput
         multiline
+        value={caption}
+        onChangeText={setCaption}
         placeholder="Write a caption..."
         placeholderTextColor="#94a3b8"
         style={[styles.input, styles.textarea]}
       />
-      <Pressable style={styles.primary}>
-        <Text style={styles.primaryText}>Publish Draft</Text>
+      <Text style={styles.createHint}>
+        Local gallery media is used now; Cloudinary upload comes next.
+      </Text>
+      <Text style={styles.status}>{status}</Text>
+      <Pressable
+        disabled={publishing || !caption.trim() || !selectedMedia}
+        style={[
+          styles.primary,
+          (publishing || !caption.trim() || !selectedMedia) && styles.disabled,
+        ]}
+        onPress={publish}
+      >
+        <Text style={styles.primaryText}>{publishing ? 'Publishing...' : 'Publish Post'}</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -390,6 +534,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  mediaImage: { width: '100%', aspectRatio: 1, backgroundColor: '#e5e7eb' },
   mediaText: { color: '#fff', fontSize: 32, fontWeight: '900' },
   caption: { padding: 14, color: '#111827', lineHeight: 21 },
   metrics: { paddingHorizontal: 14, paddingBottom: 14, color: '#64748b', fontWeight: '800' },
@@ -403,6 +548,35 @@ const styles = StyleSheet.create({
     color: '#111827',
   },
   textarea: { minHeight: 120, paddingTop: 12, textAlignVertical: 'top' },
+  createHint: { color: '#64748b', marginTop: 10, lineHeight: 20 },
+  mediaPicker: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 10,
+  },
+  createPreview: { width: '100%', height: '100%' },
+  emptyPreview: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  emptyPreviewTitle: { color: '#111827', fontWeight: '900', fontSize: 20 },
+  emptyPreviewText: { color: '#64748b', marginTop: 6, textAlign: 'center' },
+  removeMediaButton: {
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#fee2e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  removeMediaText: { color: '#991b1b', fontWeight: '900' },
   row: {
     paddingVertical: 16,
     borderBottomColor: '#f3f4f6',
@@ -420,6 +594,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   primaryText: { color: '#fff', fontWeight: '900' },
+  disabled: { opacity: 0.65 },
   reel: { flex: 1, backgroundColor: '#111827', justifyContent: 'flex-end', padding: 20 },
   reelTitle: { color: '#fff', fontSize: 32, fontWeight: '900', marginBottom: 10 },
   reelCopy: { color: '#e5e7eb', lineHeight: 22 },

@@ -10,6 +10,12 @@ cloudinary.config({
   secure: true,
 });
 
+function hasRealValue(value?: string) {
+  return Boolean(
+    value && !['replace_me', 'sk_test_replace_me', 'pk_test_replace_me'].includes(value),
+  );
+}
+
 const s3 = new S3Client({
   region: env.AWS_REGION,
   credentials:
@@ -19,7 +25,7 @@ const s3 = new S3Client({
 });
 
 export async function uploadToCloudinary(filePath: string, folder = 'krazyverse') {
-  if (!env.CLOUDINARY_CLOUD_NAME || !env.CLOUDINARY_API_KEY || !env.CLOUDINARY_API_SECRET) {
+  if (!isCloudinaryConfigured()) {
     throw new ApiError(503, 'Cloudinary is not configured', 'STORAGE_NOT_CONFIGURED');
   }
   return cloudinary.uploader.upload(filePath, {
@@ -27,6 +33,14 @@ export async function uploadToCloudinary(filePath: string, folder = 'krazyverse'
     resource_type: 'auto',
     overwrite: false,
   });
+}
+
+export function isCloudinaryConfigured() {
+  return (
+    hasRealValue(env.CLOUDINARY_CLOUD_NAME) &&
+    hasRealValue(env.CLOUDINARY_API_KEY) &&
+    hasRealValue(env.CLOUDINARY_API_SECRET)
+  );
 }
 
 export async function backupToS3(key: string, body: Buffer | string) {

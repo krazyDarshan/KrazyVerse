@@ -4,6 +4,7 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'path';
 import { env } from './config/env';
 import { requestId } from './middleware/request-id';
 import { redisRateLimit } from './middleware/rate-limit';
@@ -40,9 +41,14 @@ export function createApp() {
   app.use(express.urlencoded({ extended: true }));
   app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   app.use(redisRateLimit({ prefix: 'api', windowMs: 60 * 1000, max: 300 }));
+  app.use('/uploads', express.static(path.resolve(process.cwd(), 'tmp/uploads')));
 
   app.get('/health', (_req, res) => {
-    res.json({ success: true, data: { status: 'ok', service: 'krazyverse-api' }, message: 'Healthy' });
+    res.json({
+      success: true,
+      data: { status: 'ok', service: 'krazyverse-api' },
+      message: 'Healthy',
+    });
   });
 
   const v1 = express.Router();
