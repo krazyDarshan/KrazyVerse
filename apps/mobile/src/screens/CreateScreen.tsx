@@ -1,9 +1,12 @@
 import { useState } from 'react';
+import type { ComponentType } from 'react';
 import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import { pickMedia } from '../lib/native';
+
+const ExpoCameraView = CameraView as unknown as ComponentType<{ style: object; mode: 'picture' | 'video' }>;
 
 export function CreateScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -13,7 +16,7 @@ export function CreateScreen() {
 
   async function chooseMedia() {
     const result = await pickMedia();
-    if (!result.canceled) {
+    if (!result.canceled && result.assets?.[0]) {
       setMediaUri(result.assets[0]?.uri ?? null);
     }
   }
@@ -46,7 +49,7 @@ export function CreateScreen() {
     }
     return (
       <View style={styles.cameraWrap}>
-        <CameraView style={styles.camera} mode="picture" />
+        <ExpoCameraView style={styles.camera} mode="picture" />
         <Pressable style={styles.closeCamera} onPress={() => setCameraOpen(false)}>
           <Ionicons name="close" size={24} color="#fff" />
         </Pressable>

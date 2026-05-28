@@ -4,13 +4,13 @@
   "private": true,
   "main": "dist/server.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "prisma generate && tsc -p tsconfig.json",
+    "dev": "dotenv -e ../../.env -- tsx watch src/server.ts",
+    "build": "dotenv -e ../../.env -- prisma generate && tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio",
+    "db:generate": "dotenv -e ../../.env -- prisma generate",
+    "db:migrate": "dotenv -e ../../.env -- prisma migrate dev --name init",
+    "db:studio": "dotenv -e ../../.env -- prisma studio",
     "test": "jest --runInBand"
   },
   "dependencies": {
@@ -61,6 +61,6 @@
     "supertest": "^7.0.0",
     "@types/supertest": "^6.0.2",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.4"
+    "typescript": "~5.3.3"
   }
 }

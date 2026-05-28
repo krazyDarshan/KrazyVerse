@@ -3,7 +3,8 @@ import { io } from 'socket.io-client';
 import { storage } from './storage';
 
 const extra = Constants.expoConfig?.extra as { apiUrl?: string } | undefined;
-export const API_URL = extra?.apiUrl ?? 'http://localhost:4000/api/v1';
+export const API_URL =
+  process.env.EXPO_PUBLIC_API_URL ?? extra?.apiUrl ?? 'http://localhost:4000/api/v1';
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = storage.getString('accessToken');
