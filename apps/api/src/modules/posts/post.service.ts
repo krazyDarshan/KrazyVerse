@@ -1,10 +1,20 @@
-import { ContentStatus, CopyrightStatus, ModerationStatus, PostVisibility, Prisma } from '@prisma/client';
+import {
+  ContentStatus,
+  CopyrightStatus,
+  ModerationStatus,
+  PostVisibility,
+  Prisma,
+} from '@prisma/client';
 import { POST_LIMITS } from '@krazyverse/shared';
 import { prisma } from '../../db/prisma';
 import { enqueue } from '../../jobs/queues';
 import { ApiError } from '../../utils/http';
 import { addDays } from '../../utils/security';
 import { indexSearchDocument } from '../../integrations/search';
+import {
+  createMentionNotifications,
+  createNotification,
+} from '../notifications/notification.service';
 
 type MediaInput = {
   type: 'IMAGE' | 'VIDEO';
@@ -99,7 +109,7 @@ export const postService = {
         status: isScheduled ? ContentStatus.SCHEDULED : ContentStatus.PUBLISHED,
         aiModerationStatus: ModerationStatus.PENDING,
         copyrightStatus: CopyrightStatus.PENDING,
-        pollOptions: input.isPollEnabled ? input.pollOptions ?? [] : undefined,
+        pollOptions: input.isPollEnabled ? (input.pollOptions ?? []) : undefined,
         media: {
           create: input.media.map((media, order) => ({
             type: media.type,
@@ -121,7 +131,11 @@ export const postService = {
     await syncTaggedUsers(post.id, input.taggedUserIds);
 
     await Promise.allSettled([
-      enqueue('moderation', 'moderate-text', { type: 'post', postId: post.id, caption: post.caption }),
+      enqueue('moderation', 'moderate-text', {
+        type: 'post',
+        postId: post.id,
+        caption: post.caption,
+      }),
       enqueue('media', 'copyright-scan', { postId: post.id, media: input.media }),
       indexSearchDocument('posts', {
         id: post.id,
@@ -129,6 +143,12 @@ export const postService = {
         authorId,
         username: undefined,
         createdAt: post.createdAt.toISOString(),
+      }),
+      createMentionNotifications({
+        actorId: authorId,
+        text: input.caption,
+        entityType: 'POST',
+        entityId: post.id,
       }),
     ]);
 
@@ -172,7 +192,12 @@ export const postService = {
   async updatePost(
     authorId: string,
     postId: string,
-    input: { caption?: string; hashtags?: string[]; taggedUserIds?: string[]; locationId?: string | null },
+    input: {
+      caption?: string;
+      hashtags?: string[];
+      taggedUserIds?: string[];
+      locationId?: string | null;
+    },
   ) {
     const post = await prisma.post.findFirst({ where: { id: postId, authorId } });
     if (!post) {
@@ -244,7 +269,9 @@ export const postService = {
         data: { payload: input.payload as Prisma.InputJsonValue },
       });
     }
-    return prisma.postDraft.create({ data: { authorId, payload: input.payload as Prisma.InputJsonValue } });
+    return prisma.postDraft.create({
+      data: { authorId, payload: input.payload as Prisma.InputJsonValue },
+    });
   },
 
   async listDrafts(authorId: string) {
@@ -260,6 +287,21 @@ export const postService = {
       return { liked: false };
     }
     await prisma.like.create({ data: { userId, postId } });
+    const post = await prisma.post.findUnique({
+      where: { id: postId },
+      select: { authorId: true },
+    });
+    if (post) {
+      await createNotification({
+        recipientId: post.authorId,
+        actorId: userId,
+        kind: 'LIKE',
+        title: 'New like',
+        body: 'Someone liked your post.',
+        entityType: 'POST',
+        entityId: postId,
+      });
+    }
     return { liked: true };
   },
 
@@ -313,6 +355,31 @@ export const postService = {
       commentId: comment.id,
       content: comment.content,
     }).catch(() => undefined);
+
+    const post = await prisma.post.findUnique({
+      where: { id: input.postId },
+      select: { authorId: true },
+    });
+    await Promise.allSettled([
+      post
+        ? createNotification({
+            recipientId: post.authorId,
+            actorId: userId,
+            kind: 'COMMENT',
+            title: 'New comment',
+            body: comment.content,
+            entityType: 'POST',
+            entityId: input.postId,
+            data: { commentId: comment.id },
+          })
+        : Promise.resolve(null),
+      createMentionNotifications({
+        actorId: userId,
+        text: comment.content,
+        entityType: 'COMMENT',
+        entityId: comment.id,
+      }),
+    ]);
 
     return comment;
   },

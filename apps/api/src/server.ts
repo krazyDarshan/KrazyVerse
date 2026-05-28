@@ -4,6 +4,7 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { logger } from './utils/logger';
 import { registerSocketHandlers } from './realtime/socket';
+import { setNotificationEmitter } from './modules/notifications/notification.service';
 
 const app = createApp();
 const server = http.createServer(app);
@@ -15,6 +16,9 @@ const io = new Server(server, {
 });
 
 registerSocketHandlers(io);
+setNotificationEmitter((recipientId, notification) => {
+  io.to(`user:${recipientId}`).emit('notification:new', notification);
+});
 
 server.listen(env.API_PORT, () => {
   logger.info(`KrazyVerse API listening on http://localhost:${env.API_PORT}`);

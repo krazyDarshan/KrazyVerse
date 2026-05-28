@@ -45,12 +45,29 @@ export function AuthScreen({ onAuthenticated }: Props) {
     setError(null);
     try {
       if (mode === 'signup') {
-        const result = await signup({
-          email: email.trim().toLowerCase(),
+        const cleanEmail = email.trim().toLowerCase();
+        const cleanUsername = normalizeUsername(username);
+        const cleanDisplayName = displayName.trim();
+        const validationError = validateSignupFields({
+          email: cleanEmail,
           password,
-          username: username.trim().toLowerCase(),
-          displayName: displayName.trim(),
+          username: cleanUsername,
+          displayName: cleanDisplayName,
         });
+
+        if (validationError) {
+          setError(validationError);
+          return;
+        }
+
+        const result = await signup({
+          email: cleanEmail,
+          password,
+          username: cleanUsername,
+          displayName: cleanDisplayName,
+        });
+        setUsername(cleanUsername);
+        setDisplayName(cleanDisplayName);
         setPendingSession(result);
         setDevOtp(result.devOtp);
         setMessage('Account created. Enter the 6-digit email code to verify this device.');
@@ -149,7 +166,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
               <Field
                 label="Username"
                 value={username}
-                onChangeText={setUsername}
+                onChangeText={(value) => setUsername(value.replace(/\s+/g, '.'))}
                 autoCapitalize="none"
                 placeholder="krazy.creator"
               />
@@ -277,7 +294,10 @@ function Field(props: {
 function readError(error: unknown) {
   if (error instanceof ApiClientError) {
     if (error.status === 422) {
-      return 'Check the form fields. Password needs uppercase, lowercase, number, and 10+ characters.';
+      return (
+        readValidationDetails(error.details) ??
+        'Check the form fields. Password needs uppercase, lowercase, number, and 10+ characters.'
+      );
     }
     if (error.status === 409) {
       return 'That email or username already exists. Try logging in or choose another username.';
@@ -288,6 +308,62 @@ function readError(error: unknown) {
     return error.message;
   }
   return error instanceof Error ? error.message : 'Something went wrong.';
+}
+
+function normalizeUsername(value: string) {
+  return value.trim().replace(/^@+/, '').replace(/\s+/g, '.').toLowerCase();
+}
+
+function validateSignupFields(input: {
+  email: string;
+  password: string;
+  username: string;
+  displayName: string;
+}) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email)) {
+    return 'Enter a valid email address.';
+  }
+  if (!/^[a-zA-Z0-9._]{3,30}$/.test(input.username)) {
+    return 'Username must be 3-30 characters and can use letters, numbers, dots, and underscores. Do not include @.';
+  }
+  if (!input.displayName) {
+    return 'Display name is required.';
+  }
+  if (input.displayName.length > 80) {
+    return 'Display name must be 80 characters or less.';
+  }
+  if (input.password.length < 10) {
+    return 'Password must be at least 10 characters.';
+  }
+  if (!/[A-Z]/.test(input.password)) {
+    return 'Password must include one uppercase letter.';
+  }
+  if (!/[a-z]/.test(input.password)) {
+    return 'Password must include one lowercase letter.';
+  }
+  if (!/[0-9]/.test(input.password)) {
+    return 'Password must include one number.';
+  }
+  return null;
+}
+
+function readValidationDetails(details: unknown) {
+  if (!details || typeof details !== 'object') {
+    return null;
+  }
+
+  const maybeDetails = details as {
+    fieldErrors?: Record<string, string[] | undefined>;
+    formErrors?: string[];
+  };
+  const messages = [
+    ...Object.entries(maybeDetails.fieldErrors ?? {}).flatMap(([field, fieldMessages]) =>
+      (fieldMessages ?? []).map((message) => `${field}: ${message}`),
+    ),
+    ...(maybeDetails.formErrors ?? []),
+  ];
+
+  return messages.length ? messages.join('\n') : null;
 }
 
 const styles = StyleSheet.create({

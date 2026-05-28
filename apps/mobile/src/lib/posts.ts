@@ -1,5 +1,7 @@
 import { api } from './api';
 
+export type FeedMode = 'recommended' | 'following' | 'trending';
+
 export type FeedPost = {
   id: string;
   caption?: string | null;
@@ -11,6 +13,28 @@ export type FeedPost = {
     altText?: string | null;
   }>;
   author?: {
+    id?: string;
+    profile?: {
+      username?: string;
+      displayName?: string;
+      profilePictureUrl?: string | null;
+    } | null;
+  } | null;
+  _count?: {
+    likes?: number;
+    comments?: number;
+    saves?: number;
+  };
+};
+
+export type PostComment = {
+  id: string;
+  postId: string;
+  authorId: string;
+  content: string;
+  createdAt: string;
+  replies?: PostComment[];
+  author?: {
     profile?: {
       username?: string;
       displayName?: string;
@@ -18,8 +42,6 @@ export type FeedPost = {
   } | null;
   _count?: {
     likes?: number;
-    comments?: number;
-    saves?: number;
   };
 };
 
@@ -107,6 +129,30 @@ function mimeTypeFromUri(uri: string) {
   return 'image/jpeg';
 }
 
+export async function loadFeed(mode: FeedMode = 'recommended') {
+  return api<FeedPost[]>(`/feed?mode=${mode}`);
+}
+
 export async function loadRecommendedFeed() {
-  return api<FeedPost[]>('/feed?mode=recommended');
+  return loadFeed('recommended');
+}
+
+export async function togglePostLike(postId: string) {
+  return api<{ liked: boolean }>(`/posts/${postId}/like`, {
+    method: 'POST',
+  });
+}
+
+export async function loadPostComments(postId: string) {
+  return api<PostComment[]>(`/posts/${postId}/comments?limit=20`);
+}
+
+export async function addPostComment(postId: string, content: string, parentId?: string) {
+  return api<PostComment>(`/posts/${postId}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({
+      content,
+      parentId,
+    }),
+  });
 }

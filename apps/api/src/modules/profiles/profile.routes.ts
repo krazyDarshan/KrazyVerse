@@ -7,6 +7,7 @@ import { requireAuth } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/async-handler';
 import { ApiError, created, ok } from '../../utils/http';
+import { createNotification } from '../notifications/notification.service';
 
 const router = Router();
 
@@ -16,7 +17,11 @@ router.get(
   asyncHandler(async (req, res) => {
     const profile = await prisma.profile.findUniqueOrThrow({
       where: { userId: req.user!.id },
-      include: { user: { select: { email: true, phone: true, emailVerifiedAt: true, phoneVerifiedAt: true } } },
+      include: {
+        user: {
+          select: { email: true, phone: true, emailVerifiedAt: true, phoneVerifiedAt: true },
+        },
+      },
     });
     return ok(res, profile, 'Profile loaded');
   }),
@@ -53,7 +58,10 @@ router.get(
               where: { status: 'PUBLISHED' },
               orderBy: { publishedAt: 'desc' },
               take: 18,
-              include: { media: { orderBy: { order: 'asc' } }, _count: { select: { likes: true, comments: true } } },
+              include: {
+                media: { orderBy: { order: 'asc' } },
+                _count: { select: { likes: true, comments: true } },
+              },
             },
             storyHighlights: { include: { stories: true } },
             userBadges: { include: { badge: true } },
@@ -65,7 +73,10 @@ router.get(
     if (!profile) {
       throw new ApiError(404, 'Profile not found', 'PROFILE_NOT_FOUND');
     }
-    await prisma.profile.update({ where: { id: profile.id }, data: { profileViews: { increment: 1 } } });
+    await prisma.profile.update({
+      where: { id: profile.id },
+      data: { profileViews: { increment: 1 } },
+    });
     return ok(res, profile, 'Profile loaded');
   }),
 );
@@ -78,28 +89,70 @@ router.post(
       throw new ApiError(422, 'You cannot follow yourself', 'SELF_FOLLOW');
     }
 
-    const targetProfile = await prisma.profile.findUniqueOrThrow({ where: { userId: req.params.userId } });
+    const targetProfile = await prisma.profile.findUniqueOrThrow({
+      where: { userId: req.params.userId },
+    });
+    const existingFollow = await prisma.follow.findUnique({
+      where: {
+        followerId_followingId: { followerId: req.user!.id, followingId: req.params.userId },
+      },
+    });
+    if (existingFollow) {
+      return ok(
+        res,
+        { following: true, requested: false, followId: existingFollow.id },
+        'Already following',
+      );
+    }
+
     if (targetProfile.accountType === 'PRIVATE') {
       const request = await prisma.followRequest.upsert({
         where: { requesterId_targetId: { requesterId: req.user!.id, targetId: req.params.userId } },
         create: { requesterId: req.user!.id, targetId: req.params.userId },
         update: { status: FollowRequestStatus.PENDING },
       });
-      return created(res, request, 'Follow request sent');
+      await createNotification({
+        recipientId: req.params.userId,
+        actorId: req.user!.id,
+        kind: 'FOLLOW_REQUEST',
+        title: 'New follow request',
+        body: 'Someone requested to follow you.',
+        entityType: 'USER',
+        entityId: req.user!.id,
+      });
+      return created(
+        res,
+        { following: false, requested: true, requestId: request.id },
+        'Follow request sent',
+      );
     }
 
-    const follow = await prisma.follow.upsert({
-      where: { followerId_followingId: { followerId: req.user!.id, followingId: req.params.userId } },
-      create: { followerId: req.user!.id, followingId: req.params.userId },
-      update: {},
+    const follow = await prisma.$transaction(async (tx) => {
+      const createdFollow = await tx.follow.create({
+        data: { followerId: req.user!.id, followingId: req.params.userId },
+      });
+      await tx.profile.update({
+        where: { userId: req.user!.id },
+        data: { followingCount: { increment: 1 } },
+      });
+      await tx.profile.update({
+        where: { userId: req.params.userId },
+        data: { followersCount: { increment: 1 } },
+      });
+      return createdFollow;
     });
 
-    await prisma.$transaction([
-      prisma.profile.update({ where: { userId: req.user!.id }, data: { followingCount: { increment: 1 } } }),
-      prisma.profile.update({ where: { userId: req.params.userId }, data: { followersCount: { increment: 1 } } }),
-    ]).catch(() => undefined);
+    await createNotification({
+      recipientId: req.params.userId,
+      actorId: req.user!.id,
+      kind: 'FOLLOW',
+      title: 'New follower',
+      body: 'Someone started following you.',
+      entityType: 'USER',
+      entityId: req.user!.id,
+    });
 
-    return ok(res, follow, 'Now following');
+    return ok(res, { following: true, requested: false, followId: follow.id }, 'Now following');
   }),
 );
 
@@ -107,13 +160,36 @@ router.delete(
   '/:userId/follow',
   requireAuth,
   asyncHandler(async (req, res) => {
-    await prisma.follow.deleteMany({
+    const deletedFollow = await prisma.follow.deleteMany({
       where: { followerId: req.user!.id, followingId: req.params.userId },
     });
-    await prisma.followRequest.deleteMany({
+    const deletedRequest = await prisma.followRequest.deleteMany({
       where: { requesterId: req.user!.id, targetId: req.params.userId },
     });
-    return ok(res, { following: false }, 'Unfollowed');
+
+    if (deletedFollow.count > 0) {
+      await prisma.$transaction([
+        prisma.profile.updateMany({
+          where: { userId: req.user!.id, followingCount: { gt: 0 } },
+          data: { followingCount: { decrement: 1 } },
+        }),
+        prisma.profile.updateMany({
+          where: { userId: req.params.userId, followersCount: { gt: 0 } },
+          data: { followersCount: { decrement: 1 } },
+        }),
+      ]);
+    }
+
+    return ok(
+      res,
+      {
+        following: false,
+        requested: false,
+        removedFollow: deletedFollow.count > 0,
+        removedRequest: deletedRequest.count > 0,
+      },
+      'Unfollowed',
+    );
   }),
 );
 
@@ -140,15 +216,42 @@ router.post(
     });
 
     if (req.body.action === 'accept') {
-      await prisma.$transaction([
-        prisma.follow.create({
-          data: { followerId: request.requesterId, followingId: request.targetId },
-        }),
-        prisma.followRequest.update({
+      const existingFollow = await prisma.follow.findUnique({
+        where: {
+          followerId_followingId: {
+            followerId: request.requesterId,
+            followingId: request.targetId,
+          },
+        },
+      });
+      await prisma.$transaction(async (tx) => {
+        if (!existingFollow) {
+          await tx.follow.create({
+            data: { followerId: request.requesterId, followingId: request.targetId },
+          });
+          await tx.profile.update({
+            where: { userId: request.requesterId },
+            data: { followingCount: { increment: 1 } },
+          });
+          await tx.profile.update({
+            where: { userId: request.targetId },
+            data: { followersCount: { increment: 1 } },
+          });
+        }
+        await tx.followRequest.update({
           where: { id: request.id },
           data: { status: FollowRequestStatus.ACCEPTED },
-        }),
-      ]);
+        });
+      });
+      await createNotification({
+        recipientId: request.requesterId,
+        actorId: request.targetId,
+        kind: 'FOLLOW',
+        title: 'Follow request accepted',
+        body: 'Your follow request was accepted.',
+        entityType: 'USER',
+        entityId: request.targetId,
+      });
       return ok(res, { accepted: true }, 'Follow request accepted');
     }
 

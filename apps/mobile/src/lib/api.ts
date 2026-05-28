@@ -11,6 +11,10 @@ type ApiEnvelope<T> = {
   success: boolean;
   data?: T;
   message?: string;
+  meta?: {
+    unreadCount?: number;
+    [key: string]: unknown;
+  };
   error?: {
     code?: string;
     details?: unknown;

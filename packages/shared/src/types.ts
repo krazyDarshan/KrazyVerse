@@ -41,6 +41,8 @@ export type SocketClientEvents = {
   };
   'typing:start': { conversationId: string };
   'typing:stop': { conversationId: string };
+  'conversation:join': { conversationId: string };
+  'conversation:read': { conversationId: string };
   'presence:update': { status: 'ONLINE' | 'OFFLINE' | 'AWAY' };
   'story:view': { storyId: string };
 };
@@ -48,6 +50,7 @@ export type SocketClientEvents = {
 export type SocketServerEvents = {
   'message:new': unknown;
   'typing:update': { conversationId: string; userId: string; isTyping: boolean };
+  'conversation:read': { conversationId: string; userId: string; readAt: string };
   'presence:update': { userId: string; status: 'ONLINE' | 'OFFLINE' | 'AWAY' };
   'notification:new': unknown;
   'story:viewed': { storyId: string; viewerId: string };

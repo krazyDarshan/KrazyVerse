@@ -6,6 +6,7 @@ import { requireAuth } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/async-handler';
 import { ApiError, created, getPagination, ok } from '../../utils/http';
+import { createNotification } from '../notifications/notification.service';
 
 const router = Router();
 
@@ -48,7 +49,21 @@ router.get(
         },
       },
     });
-    return ok(res, conversations, 'Conversations loaded');
+    const enriched = await Promise.all(
+      conversations.map(async (member) => {
+        const unreadAfter = member.lastReadAt ?? member.joinedAt;
+        const unreadCount = await prisma.message.count({
+          where: {
+            conversationId: member.conversationId,
+            senderId: { not: req.user!.id },
+            createdAt: { gt: unreadAfter },
+            deletedForEveryoneAt: null,
+          },
+        });
+        return { ...member, unreadCount };
+      }),
+    );
+    return ok(res, enriched, 'Conversations loaded');
   }),
 );
 
@@ -95,7 +110,52 @@ router.post(
       where: { id: req.body.conversationId },
       data: { lastMessageAt: new Date() },
     });
+    await prisma.conversationMember.update({
+      where: {
+        conversationId_userId: {
+          conversationId: req.body.conversationId,
+          userId: req.user!.id,
+        },
+      },
+      data: { lastReadAt: message.createdAt },
+    });
+    const recipients = await prisma.conversationMember.findMany({
+      where: { conversationId: req.body.conversationId, userId: { not: req.user!.id } },
+      select: { userId: true },
+    });
+    await Promise.allSettled(
+      recipients.map((recipient) =>
+        createNotification({
+          recipientId: recipient.userId,
+          actorId: req.user!.id,
+          kind: 'DM',
+          title: 'New message',
+          body: message.content ?? 'Sent you a message.',
+          entityType: 'CONVERSATION',
+          entityId: req.body.conversationId,
+          data: { messageId: message.id },
+        }),
+      ),
+    );
     return created(res, message, 'Message sent');
+  }),
+);
+
+router.post(
+  '/conversations/:id/read',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const readAt = new Date();
+    const member = await prisma.conversationMember.update({
+      where: {
+        conversationId_userId: {
+          conversationId: req.params.id,
+          userId: req.user!.id,
+        },
+      },
+      data: { lastReadAt: readAt },
+    });
+    return ok(res, { conversationId: member.conversationId, readAt }, 'Conversation marked read');
   }),
 );
 
@@ -104,8 +164,12 @@ router.patch(
   requireAuth,
   validate(z.object({ content: z.string().min(1).max(5000) })),
   asyncHandler(async (req, res) => {
-    const message = await prisma.message.findFirstOrThrow({ where: { id: req.params.id, senderId: req.user!.id } });
-    const editDeadline = new Date(message.createdAt.getTime() + CHAT_LIMITS.editMinutes * 60 * 1000);
+    const message = await prisma.message.findFirstOrThrow({
+      where: { id: req.params.id, senderId: req.user!.id },
+    });
+    const editDeadline = new Date(
+      message.createdAt.getTime() + CHAT_LIMITS.editMinutes * 60 * 1000,
+    );
     if (editDeadline < new Date()) {
       throw new ApiError(403, 'Message edit window has expired', 'EDIT_WINDOW_EXPIRED');
     }
@@ -121,8 +185,12 @@ router.delete(
   '/messages/:id',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const message = await prisma.message.findFirstOrThrow({ where: { id: req.params.id, senderId: req.user!.id } });
-    const deleteDeadline = new Date(message.createdAt.getTime() + CHAT_LIMITS.deleteForEveryoneMinutes * 60 * 1000);
+    const message = await prisma.message.findFirstOrThrow({
+      where: { id: req.params.id, senderId: req.user!.id },
+    });
+    const deleteDeadline = new Date(
+      message.createdAt.getTime() + CHAT_LIMITS.deleteForEveryoneMinutes * 60 * 1000,
+    );
     if (deleteDeadline < new Date()) {
       throw new ApiError(403, 'Delete-for-everyone window has expired', 'DELETE_WINDOW_EXPIRED');
     }
@@ -149,7 +217,9 @@ router.post(
 router.post(
   '/messages/:id/forward',
   requireAuth,
-  validate(z.object({ conversationIds: z.array(z.string()).min(1).max(CHAT_LIMITS.forwardChatLimit) })),
+  validate(
+    z.object({ conversationIds: z.array(z.string()).min(1).max(CHAT_LIMITS.forwardChatLimit) }),
+  ),
   asyncHandler(async (req, res) => {
     const source = await prisma.message.findUniqueOrThrow({ where: { id: req.params.id } });
     const forwarded = await prisma.$transaction(
